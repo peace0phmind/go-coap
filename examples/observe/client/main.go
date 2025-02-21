@@ -24,6 +24,12 @@ func main() {
 		if num >= 10 {
 			sync <- true
 		}
+
+		body, err := req.ReadBody()
+		if err != nil {
+			log.Printf("Error reading body: %v", err)
+		}
+		log.Printf("Body: %s", string(body))
 	})
 	if err != nil {
 		log.Fatalf("Unexpected error '%v'", err)

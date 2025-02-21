@@ -26,4 +26,10 @@ func main() {
 		log.Fatalf("Error sending request: %v", err)
 	}
 	log.Printf("Response payload: %v", resp.String())
+
+	body, err := resp.ReadBody()
+	if err != nil {
+		log.Fatalf("Error reading response body: %v", err)
+	}
+	log.Printf("Response body: %s", string(body))
 }
