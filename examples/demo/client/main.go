@@ -27,8 +27,9 @@ func main() {
 	}
 
 	// 创建UDP服务器
-	timeout := time.Second * 30
-	s := udp.NewServer(options.WithTransmission(1, timeout/2, 2), options.WithMessagePool(messagePool))
+	discoveryTimeout := time.Second * 3   // 发现超时设为3秒
+	connectionTimeout := time.Second * 30 // 连接超时保持30秒
+	s := udp.NewServer(options.WithTransmission(1, discoveryTimeout/2, 2), options.WithMessagePool(messagePool))
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -42,7 +43,7 @@ func main() {
 	}()
 
 	// 创建发现请求上下文
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
 	defer cancel()
 
 	// 用于存储发现的第一个设备地址
@@ -69,19 +70,35 @@ func main() {
 	log.Println("Discovering devices...")
 	err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.Conn, resp *pool.Message) {
 		addr := cc.RemoteAddr().String()
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			log.Printf("Error parsing address %v: %v", addr, err)
+			return
+		}
+
+		// 跳过本地回环地址
+		if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+			log.Printf("Skipping local device at: %v\n", addr)
+			return
+		}
+
+		log.Printf("Discovered device at: %v\n", addr)
 		if firstDevice == "" {
 			firstDevice = addr
 			deviceFound <- true
 		}
-		log.Printf("Discovered device at: %v\n", addr)
 	})
 	if err != nil {
 		log.Fatal("discovery error:", err)
 	}
 
 	// 等待发现至少一个设备
-	<-deviceFound
-	log.Printf("Selected device: %v\n", firstDevice)
+	select {
+	case <-deviceFound:
+		log.Printf("Selected device: %v\n", firstDevice)
+	case <-time.After(discoveryTimeout):
+		log.Fatal("Timeout: No non-local devices found")
+	}
 
 	// 修改端口为5688用于observer连接
 	host, _, err := net.SplitHostPort(firstDevice)
@@ -91,7 +108,7 @@ func main() {
 	observerAddr := fmt.Sprintf("%s:5688", host)
 
 	// 连接到选定的设备
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second*30)
+	ctx, cancel = context.WithTimeout(context.Background(), connectionTimeout)
 	defer cancel()
 
 	co, err := udp.Dial(observerAddr,
@@ -105,14 +122,15 @@ func main() {
 
 	// 设置观察处理函数
 	log.Println("Starting observation...")
+	fmt.Println("Press Ctrl+C to exit") // 提前打印退出提示
+
 	obs, err := co.Observe(ctx, "/observe", func(req *pool.Message) {
-		log.Printf("Received message from %v\n", firstDevice)
 		body, err := req.ReadBody()
 		if err != nil {
 			log.Printf("Error reading body: %v", err)
 			return
 		}
-		log.Printf("Message body: %s\n", string(body))
+		log.Printf("Message from %v: %s\n", firstDevice, string(body)) // 简化输出格式
 	})
 	if err != nil {
 		log.Fatal("Observe error:", err)
@@ -124,6 +142,5 @@ func main() {
 	}()
 
 	// 保持程序运行
-	fmt.Println("Press Ctrl+C to exit")
 	select {}
 }
